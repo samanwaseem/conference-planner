@@ -29,11 +29,15 @@ export type SessionKind = "opening" | "keynote" | "tutorial" | "panel" | "showca
 export type Session = { kind: SessionKind; title: string; note?: string; continued?: boolean };
 export type Schedule = Session[][];
 
+export type Speaker = { id: string; name: string; talk: string; fee: number; travel: number };
+export const speakerCost = (s: Speaker) => s.fee + s.travel;
+export const totalSpeakerCost = (list: Speaker[]) => list.reduce((a, s) => a + speakerCost(s), 0);
+
 /** The UI specification the model fills in. Rendering is done by our own components. */
 export type Spec = {
   components: CompName[];
   assumptions: string[];
-  speaker: { name: string; bio: string; fee: number; travel: number };
+  speakers: Speaker[];
   tutorialTitles: string[];
   tasks: string[];
   reply?: string;
@@ -117,7 +121,8 @@ export function detectClash(p: PlannerParams): ClashReport {
 }
 
 /** Tool: build_schedule. Uses ONLY the five standard slots, whatever the model says. */
-export function buildSchedule(p: PlannerParams, resolution: Resolution): Schedule {
+export function buildSchedule(p: PlannerParams, resolution: Resolution, speakerNames: string[] = []): Schedule {
+  const guests = speakerNames.slice(1).join(", ") || undefined;
   const open = (): Session => ({ kind: "open", title: "Open / Networking" });
   const days: Schedule = Array.from({ length: p.days }, () => SLOTS.map(open));
   const put = (d: number, i: number, s: Session, onlyIfOpen = false) => {
@@ -128,17 +133,17 @@ export function buildSchedule(p: PlannerParams, resolution: Resolution): Schedul
   const tut = (n: number): Session => ({ kind: "tutorial", title: `Tutorial ${n}`, note: `${p.semesters} Semester` });
 
   put(0, 0, { kind: "opening", title: "Opening Session & Registration" });
-  put(0, 1, { kind: "keynote", title: `${p.topic} Keynote`, note: "Keynote speaker" });
+  put(0, 1, { kind: "keynote", title: `${p.topic} Keynote`, note: speakerNames[0] ?? "Keynote speaker" });
 
   if (resolution === "merge-block") {
     const nums = Array.from({ length: p.tutorials }, (_, i) => i + 1);
     const half = Math.ceil(nums.length / 2);
     put(0, 2, { kind: "tutorial", title: `Tutorial Lab: T${nums.slice(0, half).join(" & T")}`, note: "2-hour merged block · part 1" });
     put(0, 3, { kind: "tutorial", title: `Tutorial Lab: T${(nums.slice(half).length ? nums.slice(half) : nums).join(" & T")}`, note: "2-hour merged block · part 2", continued: true });
-    put(0, 4, { kind: "panel", title: "Speaker Q&A", note: "Open floor with the keynote speaker" });
+    put(0, 4, { kind: "panel", title: "Speaker Q&A", note: `Open floor with ${speakerNames[0] ?? "the keynote speaker"}` });
     if (p.days >= 2) {
       put(1, 0, { kind: "showcase", title: "Student Project Showcase" });
-      put(1, 1, { kind: "panel", title: `${p.topic} Industry Panel` });
+      put(1, 1, { kind: "panel", title: `${p.topic} Industry Panel`, note: guests });
       put(1, 3, { kind: "closing", title: "Closing & Certificates" });
     }
   } else if (resolution === "move-to-day-2" && p.days >= 2) {
@@ -146,7 +151,7 @@ export function buildSchedule(p: PlannerParams, resolution: Resolution): Schedul
     for (let i = 0; i < onDay1; i++) put(0, 2 + i, tut(i + 1));
     for (let i = onDay1; i < p.tutorials; i++) put(1, i - onDay1, tut(i + 1));
     const next = p.tutorials - onDay1;
-    put(1, next, { kind: "panel", title: `${p.topic} Industry Panel` }, true);
+    put(1, next, { kind: "panel", title: `${p.topic} Industry Panel`, note: guests }, true);
     put(1, next + 1, { kind: "showcase", title: "Student Project Showcase" }, true);
     put(1, 4, { kind: "closing", title: "Closing & Certificates" }, true);
   } else {
@@ -180,12 +185,7 @@ export function localGenerate(p: PlannerParams, keep?: CompName[]): Spec {
       "Each session uses one standard 75-minute IBA slot.",
       "Day 1 always starts with an Opening Session, then the keynote.",
     ],
-    speaker: {
-      name: "Dr. Alan Turing",
-      bio: `Keynote on ${p.topic} in HCI`,
-      fee,
-      travel: Math.min(100, Math.floor(p.budget * 0.1), p.budget - fee),
-    },
+    speakers: [{ id: "sp1", name: "Dr. Alan Turing", talk: `${p.topic} in HCI`, fee, travel: Math.min(100, Math.floor(p.budget * 0.1), p.budget - fee) }],
     tutorialTitles: defaultTitles(p.topic).slice(0, p.tutorials),
     tasks: [
       "Send speaker invitation",
@@ -196,29 +196,105 @@ export function localGenerate(p: PlannerParams, keep?: CompName[]): Spec {
   };
 }
 
+/** What the model returns: speakers have no ids yet. */
+export type SpecInput = Omit<Partial<Spec>, "speakers"> & { speakers?: (Omit<Speaker, "id"> & { id?: string })[] };
+
+const money = (v: unknown) => Math.max(0, Math.round(Number(v)) || 0);
+
 /** Enforce the rules the model must never break, whatever it returned. */
-export function normalizeSpec(s: Partial<Spec>, p: PlannerParams): Spec {
+export function normalizeSpec(s: SpecInput, p: PlannerParams, opts: { enforceBudget?: boolean } = {}): Spec {
   const base = localGenerate(p);
   const comps = (s.components ?? base.components).filter((c, i, a) => (COMPONENTS as readonly string[]).includes(c) && a.indexOf(c) === i);
   if (!comps.includes("ScheduleTable")) comps.push("ScheduleTable");
-  const sp = { ...base.speaker, ...(s.speaker ?? {}) };
-  sp.fee = Math.max(0, Math.min(Math.round(Number(sp.fee)) || base.speaker.fee, p.budget));
-  sp.travel = Math.max(0, Math.min(Math.round(Number(sp.travel)) || 0, p.budget - sp.fee));
+  const raw = s.speakers?.length ? s.speakers : base.speakers;
+  const seen = new Set<string>();
+  let speakers: Speaker[] = raw.slice(0, 6).map((x, i) => {
+    let id = x.id || `sp${i + 1}`;
+    while (seen.has(id)) id += "x";
+    seen.add(id);
+    return { id, name: (x.name || "Speaker").toString().slice(0, 60), talk: (x.talk ?? "").toString().slice(0, 80), fee: money(x.fee), travel: money(x.travel) };
+  });
+  const total = totalSpeakerCost(speakers);
+  if (opts.enforceBudget && total > p.budget && total > 0) {
+    const f = p.budget / total;
+    speakers = speakers.map((x) => ({ ...x, fee: Math.floor(x.fee * f), travel: Math.floor(x.travel * f) }));
+  }
   return {
     components: comps as CompName[],
     assumptions: (s.assumptions?.length ? s.assumptions : base.assumptions).slice(0, 5),
-    speaker: sp,
+    speakers,
     tutorialTitles: Array.from({ length: p.tutorials }, (_, i) => s.tutorialTitles?.[i] || base.tutorialTitles[i] || `Tutorial ${i + 1}`),
     tasks: (s.tasks?.length ? s.tasks : base.tasks).slice(0, 6),
     reply: s.reply,
   };
 }
 
-/** Offline stand-in for the model's "edit the workspace" step (keyword rules). */
+/**
+ * Deterministic edit parser. Turns phrases such as "set days to 3", "budget to 1500",
+ * "make it 5 tutorials", "semester 5th & 6th", "add a speaker Dr. Ada with $300" into real changes.
+ * Used offline AND as a guardrail on top of the live model, so a request is never silently ignored.
+ */
+export function extractEdits(instruction: string, params: PlannerParams, spec: Spec): { params: PlannerParams; spec: Spec; changes: string[] } {
+  const text = instruction.trim();
+  const t = text.toLowerCase();
+  const next: PlannerParams = { ...params };
+  const speakers: Speaker[] = spec.speakers.map((x) => ({ ...x }));
+  const changes: string[] = [];
+  const num = (v: string) => parseInt(v.replace(/,/g, ""), 10);
+
+  // speakers
+  let mentionsSpeakerMoney = false;
+  const add = text.match(/\badd\s+(?:a\s+|another\s+|one\s+)?(?:new\s+)?(?:guest\s+)?speaker\s+(.+)/i);
+  if (add) {
+    let rest = add[1];
+    let fee = 200;
+    const m = rest.match(/\$\s*([\d,]+)|([\d,]+)\s*(?:usd|dollars)/i);
+    if (m) { fee = num(m[1] ?? m[2]); rest = rest.replace(m[0], " "); mentionsSpeakerMoney = true; }
+    const name = rest.replace(/^\s*(?:called|named)\s+/i, "").replace(/\b(with|for|at|fee|budget)\b/gi, " ").replace(/[,;]+/g, " ").replace(/\s+/g, " ").replace(/[.\s]+$/, "").trim() || "Guest Speaker";
+    if (!speakers.some((x) => x.name.toLowerCase() === name.toLowerCase())) {
+      speakers.push({ id: `sp${Date.now() % 100000}${speakers.length}`, name, talk: `${next.topic} talk`, fee: money(fee), travel: 0 });
+      changes.push(`added speaker ${name} ($${money(fee)})`);
+    }
+  }
+  const rem = text.match(/\b(?:remove|delete|drop)\s+(?:the\s+)?speaker\s+(.+)/i);
+  if (rem) {
+    const target = rem[1].replace(/[.;]+$/, "").trim().toLowerCase();
+    const idx = speakers.findIndex((x) => x.name.toLowerCase().includes(target) || target.includes(x.name.toLowerCase()));
+    if (idx >= 0 && speakers.length > 1) { changes.push(`removed speaker ${speakers[idx].name}`); speakers.splice(idx, 1); }
+  }
+
+  // settings
+  const tut = t.match(/(\d+)\s*-?\s*tutorials?\b/) || t.match(/tutorials?\s*(?:to|=|:|are|be|of)?\s*(\d+)/);
+  if (tut) next.tutorials = num(tut[1]);
+  const days = t.match(/(\d+)\s*-?\s*days?\b/) || t.match(/\bdays?\s*(?:to|=|:|are|be|of)\s*(\d+)/);
+  if (days) next.days = num(days[1]);
+  const bud =
+    t.match(/budget\s*(?:to|=|:|of|is|at)?\s*\$?\s*([\d,]{3,})/) ||
+    t.match(/\$\s*([\d,]+)\s*(?:budget|total)/) ||
+    (!mentionsSpeakerMoney && !/speaker/.test(t) ? t.match(/\$\s*([\d,]+)/) : null);
+  if (bud) next.budget = num(bud[1]);
+  if (/semesters?/.test(t)) {
+    let list = semestersToList(text);
+    if (!list.length) {
+      const tail = t.slice(t.search(/semesters?/));
+      list = Array.from(new Set(Array.from(tail.matchAll(/\b([1-8])\b/g)).map((m) => +m[1]))).sort((a, b) => a - b);
+    }
+    if (list.length) next.semesters = listToSemesters(list);
+  }
+  const top = text.match(/topic\s*(?:to|=|:|is)\s*([A-Za-z0-9 \-]+)/i);
+  if (top) next.topic = top[1].trim();
+
+  const clamped = clampParams(next);
+  (["days", "tutorials", "budget", "semesters", "topic"] as const).forEach((k) => {
+    if (clamped[k] !== params[k]) changes.push(`set ${k} to ${k === "budget" ? "$" + clamped[k] : clamped[k]}`);
+  });
+  return { params: clamped, spec: { ...spec, speakers }, changes };
+}
+
+/** Offline stand-in for the model's "edit the workspace" step. */
 export function localRefine(instruction: string, params: PlannerParams, spec: Spec): { params: PlannerParams; spec: Spec } {
   const t = instruction.toLowerCase();
-  const remove = /\b(remove|hide|drop|delete|without)\b/.test(t);
-  const next = { ...params };
+  const remove = /\b(remove|hide|drop|delete|without)\b/.test(t) && !/\bspeaker\b/.test(t);
   const comps = [...spec.components];
   const changes: string[] = [];
   const toggle = (c: CompName, label: string) => {
@@ -228,15 +304,30 @@ export function localRefine(instruction: string, params: PlannerParams, spec: Sp
   };
   if (/chart|breakdown|spend/.test(t)) toggle("BudgetChart", "budget chart");
   if (/checklist|tasks?\b|to-?do/.test(t)) toggle("TaskChecklist", "task checklist");
-  const tuts = t.match(/(\d+)\s*tutorial/); if (tuts) { next.tutorials = +tuts[1]; changes.push(`set tutorials to ${next.tutorials}`); }
-  const days = t.match(/(\d+)\s*day/); if (days) { next.days = +days[1]; changes.push(`set days to ${next.days}`); }
-  const bud = t.match(/\$\s*([\d,]+)/); if (bud) { next.budget = +bud[1].replace(/,/g, ""); changes.push(`set budget to $${next.budget}`); }
-  const top = instruction.match(/topic\s*(?:to|:)\s*([A-Za-z0-9 \-]+)/i); if (top) { next.topic = top[1].trim(); changes.push(`set topic to ${next.topic}`); }
-  const clamped = clampParams(next);
-  const out = normalizeSpec({ ...spec, components: comps, tutorialTitles: spec.tutorialTitles }, clamped);
-  if (clamped.topic !== params.topic) out.tutorialTitles = defaultTitles(clamped.topic).slice(0, clamped.tutorials);
+  const edits = extractEdits(instruction, params, spec);
+  changes.push(...edits.changes);
+  const out = normalizeSpec({ ...edits.spec, components: comps }, edits.params);
+  if (edits.params.topic !== params.topic) out.tutorialTitles = defaultTitles(edits.params.topic).slice(0, edits.params.tutorials);
   out.reply = changes.length
     ? `Done: I ${changes.join(", ")}.`
-    : "I couldn't map that to a change offline. Try “add a budget chart”, “add a task checklist” or “make it 5 tutorials”. A live model understands free-form requests.";
-  return { params: clamped, spec: out };
+    : "I couldn't apply that. Try “set days to 3”, “set budget to $1500”, “add a speaker Dr. Ada with $300” or “add a budget chart”.";
+  return { params: edits.params, spec: out };
 }
+
+/** After the live model answers an edit request, make sure explicit instructions were really applied. */
+export function finalizeRefine(instruction: string, before: { params: PlannerParams; spec: Spec }, model: { params: Partial<PlannerParams>; spec: SpecInput }): { params: PlannerParams; spec: Spec } {
+  const modelParams = clampParams(model.params);
+  const modelSpec = normalizeSpec(model.spec, modelParams);
+  const det = extractEdits(instruction, modelParams, modelSpec);
+  const spec = normalizeSpec({ ...det.spec, reply: model.spec.reply }, det.params);
+  if (det.params.topic !== before.params.topic && !model.spec.tutorialTitles?.length) spec.tutorialTitles = defaultTitles(det.params.topic).slice(0, det.params.tutorials);
+  const sig = (x: { params: PlannerParams; spec: Spec }) =>
+    JSON.stringify([x.params, x.spec.components, x.spec.speakers.map((v) => [v.name, v.talk, v.fee, v.travel])]);
+  if (sig(before) === sig({ params: det.params, spec })) {
+    spec.reply = "I couldn't apply that. Try “set days to 3”, “set budget to $1500”, “add a speaker Dr. Ada with $300” or “add a budget chart”.";
+  } else if (!spec.reply) {
+    spec.reply = det.changes.length ? `Done: I ${det.changes.join(", ")}.` : "Workspace updated.";
+  }
+  return { params: det.params, spec };
+}
+
