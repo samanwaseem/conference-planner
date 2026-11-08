@@ -16,13 +16,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertTriangle, ArrowLeft, BarChart3, Bot, CalendarDays, CalendarPlus, Check, CheckCircle2, Clock, Coffee,
+  ArrowLeft, BarChart3, Bot, CalendarDays, CalendarPlus, Check, CheckCircle2, Clock, Coffee,
   GraduationCap, Landmark, Layers, ListChecks, Loader2, MessageSquareText, Mic2, RotateCcw, Send, ShieldCheck,
-  Sparkles, Terminal, Undo2, Users, Wallet, Wand2,
+  Plus, Sparkles, Terminal, Trash2, Undo2, Users, Wallet, Wand2,
 } from "lucide-react";
 import {
-  SLOTS, buildSchedule, clampParams, detectClash, listToSemesters, localGenerate, localRefine, parseRequest, semestersToList,
-  type ClashReport, type CompName, type PlannerParams, type Resolution, type Schedule, type Session, type SessionKind, type Spec,
+  SLOTS, buildSchedule, clampParams, detectClash, listToSemesters, localGenerate, localRefine, parseRequest, semestersToList, totalSpeakerCost,
+  type ClashReport, type CompName, type PlannerParams, type Resolution, type Schedule, type Session, type SessionKind, type Spec, type Speaker,
 } from "../lib/genui";
 
 const NAVY = "#4A1D24";
@@ -258,10 +258,7 @@ function BriefScreen({ onSubmit }: { onSubmit: (p: PlannerParams) => void }) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-5xl font-semibold tracking-tight" style={{ color: NAVY }}>New conference brief</h2>
-          <p className="text-stone-600 mt-1">Fill in the details. The preview updates as you type.</p>
-        </div>
+        <span />
         <button type="button" onClick={applyDemo} className="inline-flex items-center gap-2 h-10 px-4 rounded-md border text-sm font-semibold hover:bg-[#FBF6EE]" style={{ color: MAROON, borderColor: MAROON }}>
           <Wand2 className="h-4 w-4" /> Load demo request
         </button>
@@ -344,13 +341,10 @@ function MiniDay({ schedule, day = 0 }: { schedule: Schedule; day?: number }) {
 function ClashResolver({ report, params, onResolve }: { report: ClashReport; params: PlannerParams; onResolve: (r: Exclude<Resolution, "none">) => void }) {
   const [hover, setHover] = useState<string | null>(null);
   return (
-    <section role="alert" className="bg-white rounded-md border overflow-hidden" style={{ borderColor: LINE }}>
-      <div className="px-6 py-5 flex gap-4 text-white" style={{ background: MAROON }}>
-        <AlertTriangle className="h-7 w-7 shrink-0 mt-0.5" />
-        <div>
-          <h2 className="text-3xl font-semibold">Your decision is needed</h2>
-          <p className="mt-1 text-white/90 leading-relaxed">{report.message}</p>
-        </div>
+    <section role="status" className="bg-white rounded-md border overflow-hidden" style={{ borderColor: LINE }}>
+      <div className="px-6 pt-6 pb-1">
+        <h2 className="text-3xl font-semibold" style={{ color: MAROON }}>Your decision is needed</h2>
+        <p className="mt-2 text-stone-700 leading-relaxed max-w-3xl">{report.message}</p>
       </div>
       <div className="p-6 grid md:grid-cols-2 gap-5">
         {report.options.map((o, i) => {
@@ -378,30 +372,58 @@ function sessionNumbers(s: Session): number[] {
   return s.kind === "tutorial" ? (s.title.match(/\d+/g) || []).map(Number) : [];
 }
 
-function SpeakerCard({ spec, topic, budget }: { spec: Spec; topic: string; budget: number }) {
-  const { fee, travel, name } = spec.speaker;
-  const total = fee + travel;
-  const pct = Math.min(100, Math.round((total / budget) * 100));
-  const initials = name.replace(/^Dr\.?\s*/i, "").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+function SpeakersCard({ speakers, topic, budget, onChange, onRaiseBudget }: { speakers: Speaker[]; topic: string; budget: number; onChange: (l: Speaker[]) => void; onRaiseBudget: (b: number) => void }) {
+  const [draft, setDraft] = useState<Speaker[]>(speakers);
+  useEffect(() => setDraft(speakers), [speakers]);
+  const upd = (i: number, patch: Partial<Speaker>) => setDraft((d) => d.map((x, k) => (k === i ? { ...x, ...patch } : x)));
+  const total = totalSpeakerCost(draft);
+  const fees = draft.reduce((a, x) => a + x.fee, 0);
+  const over = total - budget;
+  const pct = Math.min(100, Math.round((total / Math.max(budget, 1)) * 100));
+  const field = "h-9 w-full rounded-md border bg-white px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#800000]";
+  const lab = "block text-[10px] font-semibold text-stone-500 mb-1 tracking-wide";
+  const fmt = (n: number) => `$${n.toLocaleString()}`;
   return (
-    <section className="bg-white rounded-md border h-full" style={{ borderColor: LINE, borderTop: `4px solid ${MAROON}` }}>
-      <div className="p-5 flex items-center gap-4">
-        <div className="h-14 w-14 rounded-md grid place-items-center text-white text-xl font-semibold" style={{ background: NAVY }}>{initials}</div>
-        <div>
-          <div className="inline-flex items-center gap-1 text-[11px] font-semibold tracking-wide" style={{ color: MAROON, fontFamily: MONO }}><Mic2 className="h-3 w-3" /> KEYNOTE SPEAKER</div>
-          <h3 className="text-3xl font-semibold" style={{ color: NAVY }}>{name}</h3>
-          <p className="text-sm text-stone-600">{topic} in HCI <span className="text-stone-400">(mock speaker)</span></p>
-        </div>
+    <section className="bg-white rounded-md border h-full flex flex-col" style={{ borderColor: LINE, borderTop: `4px solid ${MAROON}` }}>
+      <div className="px-5 py-3 border-b flex items-center justify-between" style={{ borderColor: LINE }}>
+        <div className="flex items-center gap-2"><Mic2 className="h-5 w-5" style={{ color: MAROON }} /><h3 className="font-semibold" style={{ color: NAVY }}>Speakers &amp; budget</h3></div>
+        <span className="text-[11px] text-stone-500" style={{ fontFamily: MONO }}>EDIT ANY FIELD</span>
       </div>
-      <div className="px-5 pb-5">
-        <div className="flex items-center gap-2 text-xs font-semibold text-stone-600 tracking-wide mb-2"><Wallet className="h-4 w-4" /> COST VS ${budget.toLocaleString()} BUDGET</div>
+      <ul>
+        {draft.map((x, i) => (
+          <li key={x.id} className="px-5 py-4 border-b" style={{ borderColor: LINE }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-semibold tracking-wide" style={{ color: MAROON, fontFamily: MONO }}>{i === 0 ? "KEYNOTE SPEAKER" : `GUEST SPEAKER ${i}`}</span>
+              <button type="button" aria-label={`Remove ${x.name}`} disabled={draft.length === 1} onClick={() => onChange(draft.filter((_, k) => k !== i))} className="h-7 w-7 grid place-items-center rounded-md text-stone-500 hover:bg-[#F4ECE0] disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div><label className={lab} htmlFor={`${x.id}-n`}>NAME</label><input id={`${x.id}-n`} value={x.name} onChange={(e) => upd(i, { name: e.target.value })} onBlur={() => onChange(draft)} className={field} style={{ borderColor: LINE }} /></div>
+              <div><label className={lab} htmlFor={`${x.id}-t`}>TALK</label><input id={`${x.id}-t`} value={x.talk} onChange={(e) => upd(i, { talk: e.target.value })} onBlur={() => onChange(draft)} className={field} style={{ borderColor: LINE }} /></div>
+              <div><label className={lab} htmlFor={`${x.id}-f`}>HONORARIUM (USD)</label><input id={`${x.id}-f`} type="number" min={0} step={50} value={x.fee} onChange={(e) => upd(i, { fee: Math.max(0, +e.target.value || 0) })} onBlur={() => onChange(draft)} className={field} style={{ borderColor: LINE, fontFamily: MONO }} /></div>
+              <div><label className={lab} htmlFor={`${x.id}-v`}>TRAVEL (USD)</label><input id={`${x.id}-v`} type="number" min={0} step={25} value={x.travel} onChange={(e) => upd(i, { travel: Math.max(0, +e.target.value || 0) })} onBlur={() => onChange(draft)} className={field} style={{ borderColor: LINE, fontFamily: MONO }} /></div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className="px-5 py-3">
+        <button type="button" disabled={draft.length >= 6} onClick={() => onChange([...draft, { id: `sp${Date.now() % 1000000}`, name: `Guest speaker ${draft.length}`, talk: `${topic} talk`, fee: 200, travel: 0 }])} className="h-9 px-3 inline-flex items-center gap-1.5 rounded-md border text-sm font-semibold hover:bg-[#FBF6EE] disabled:opacity-40" style={{ borderColor: MAROON, color: MAROON }}><Plus className="h-4 w-4" /> Add speaker</button>
+      </div>
+      <div className="mt-auto px-5 pb-5 pt-3 border-t" style={{ borderColor: LINE }}>
+        <div className="flex items-center gap-2 text-xs font-semibold text-stone-600 tracking-wide mb-2"><Wallet className="h-4 w-4" /> SPEAKER COST VS {fmt(budget)} BUDGET</div>
         <dl className="text-sm space-y-1.5">
-          <div className="flex justify-between"><dt className="text-stone-600">Speaker honorarium</dt><dd style={{ fontFamily: MONO }}>${fee}</dd></div>
-          <div className="flex justify-between"><dt className="text-stone-600">Travel & hospitality</dt><dd style={{ fontFamily: MONO }}>${travel}</dd></div>
-          <div className="flex justify-between border-t pt-2 mt-2 font-semibold" style={{ borderColor: LINE, color: NAVY }}><dt>Total</dt><dd style={{ fontFamily: MONO }}>${total}</dd></div>
+          <div className="flex justify-between"><dt className="text-stone-600">Honorariums ({draft.length})</dt><dd style={{ fontFamily: MONO }}>{fmt(fees)}</dd></div>
+          <div className="flex justify-between"><dt className="text-stone-600">Travel &amp; hospitality</dt><dd style={{ fontFamily: MONO }}>{fmt(total - fees)}</dd></div>
+          <div className="flex justify-between border-t pt-2 mt-2 font-semibold" style={{ borderColor: LINE, color: NAVY }}><dt>Total</dt><dd style={{ fontFamily: MONO }}>{fmt(total)}</dd></div>
         </dl>
-        <div className="mt-3 h-2 rounded-sm overflow-hidden" style={{ background: WASH }} aria-hidden><div className="h-full" style={{ width: `${pct}%`, background: NAVY }} /></div>
-        <p className="mt-2 text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Within budget, ${budget - total} remaining</p>
+        <div className="mt-3 h-2 rounded-sm overflow-hidden" style={{ background: WASH }} aria-hidden><div className="h-full transition-all" style={{ width: `${pct}%`, background: over > 0 ? "#B8860B" : NAVY }} /></div>
+        {over > 0 ? (
+          <div className="mt-3 rounded-md border px-3 py-2.5 text-sm flex flex-wrap items-center justify-between gap-2" style={{ borderColor: "#E5C98A", background: "#FBF1DA", color: "#6B4A00" }}>
+            <span>Over budget by {fmt(over)}.</span>
+            <button type="button" onClick={() => onRaiseBudget(total)} className="h-8 px-3 rounded-md text-white text-xs font-semibold" style={{ background: MAROON }}>Raise budget to {fmt(total)}</button>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-emerald-700 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Within budget, {fmt(budget - total)} remaining</p>
+        )}
       </div>
     </section>
   );
@@ -440,24 +462,27 @@ function TutorialList({ schedule, spec, semesters, focus, setFocus }: { schedule
   );
 }
 
-function BudgetChart({ spec, budget }: { spec: Spec; budget: number }) {
-  const rest = Math.max(0, budget - spec.speaker.fee - spec.speaker.travel);
-  const rows = [
-    { label: "Speaker honorarium", v: spec.speaker.fee, c: NAVY },
-    { label: "Travel & hospitality", v: spec.speaker.travel, c: MAROON },
-    { label: "Unallocated", v: rest, c: "#D9C7B2" },
-  ];
+function BudgetChart({ speakers, budget }: { speakers: Speaker[]; budget: number }) {
+  const palette = ["#800000", "#4A1D24", "#A8553F", "#C58B6F", "#8A6F5A", "#6B3B30"];
+  const total = totalSpeakerCost(speakers);
+  const rows = speakers.map((x, i) => ({ label: x.name, v: x.fee + x.travel, c: palette[i % palette.length] }));
+  const rest = budget - total;
+  const scale = Math.max(budget, total, 1);
   return (
     <section className="bg-white rounded-md border h-full" style={{ borderColor: LINE, borderTop: `4px solid ${NAVY}` }}>
       <div className="px-5 py-3 border-b flex items-center gap-2" style={{ borderColor: LINE }}><BarChart3 className="h-5 w-5" style={{ color: MAROON }} /><h3 className="font-semibold" style={{ color: NAVY }}>Budget breakdown</h3></div>
       <div className="p-5 space-y-4">
-        {rows.map((r) => (
-          <div key={r.label}>
-            <div className="flex justify-between text-sm mb-1"><span className="text-stone-700">{r.label}</span><span style={{ fontFamily: MONO }}>${r.v} · {Math.round((r.v / budget) * 100)}%</span></div>
-            <div className="h-3 rounded-sm" style={{ background: WASH }}><div className="h-full rounded-sm transition-all" style={{ width: `${(r.v / budget) * 100}%`, background: r.c }} /></div>
+        {rows.map((r, i) => (
+          <div key={i}>
+            <div className="flex justify-between text-sm mb-1"><span className="text-stone-700">{r.label}</span><span style={{ fontFamily: MONO }}>${r.v.toLocaleString()} · {Math.round((r.v / Math.max(budget, 1)) * 100)}%</span></div>
+            <div className="h-3 rounded-sm" style={{ background: WASH }}><div className="h-full rounded-sm transition-all" style={{ width: `${(r.v / scale) * 100}%`, background: r.c }} /></div>
           </div>
         ))}
-        <p className="text-xs text-stone-500">Total budget ${budget.toLocaleString()}</p>
+        <div>
+          <div className="flex justify-between text-sm mb-1"><span className="text-stone-700">{rest >= 0 ? "Unallocated" : "Over budget"}</span><span style={{ fontFamily: MONO }}>${Math.abs(rest).toLocaleString()}</span></div>
+          <div className="h-3 rounded-sm" style={{ background: WASH }}><div className="h-full rounded-sm" style={{ width: `${(Math.abs(rest) / scale) * 100}%`, background: rest >= 0 ? "#D9C7B2" : "#B8860B" }} /></div>
+        </div>
+        <p className="text-xs text-stone-500">Total budget ${budget.toLocaleString()} · speaker cost ${total.toLocaleString()}</p>
       </div>
     </section>
   );
@@ -559,7 +584,7 @@ function AdjustPanel({ params, onChange, disabled }: { params: PlannerParams; on
 
 function RefineBar({ onSend, disabled }: { onSend: (t: string) => void; disabled: boolean }) {
   const [text, setText] = useState("");
-  const chips = ["Add a budget chart", "Add a task checklist", "Make it 5 tutorials", "Remove the budget chart"];
+  const chips = ["Set days to 3", "Set budget to $1500", "Make it 5 tutorials", "Add a speaker Dr. Ada Lovelace with $300", "Add a budget chart"];
   const submit = (t: string) => { if (t.trim()) { onSend(t.trim()); setText(""); } };
   return (
     <section className="bg-white rounded-md border p-5" style={{ borderColor: LINE, borderTop: `4px solid ${MAROON}` }}>
@@ -567,7 +592,7 @@ function RefineBar({ onSend, disabled }: { onSend: (t: string) => void; disabled
         <Sparkles className="h-4 w-4" style={{ color: MAROON }} /> Ask the AI to reshape this workspace
       </label>
       <form onSubmit={(e) => { e.preventDefault(); submit(text); }} className="flex gap-2">
-        <input id="refine" value={text} disabled={disabled} onChange={(e) => setText(e.target.value)} placeholder="e.g. add a budget chart, or make it 3 days" className="flex-1 h-10 rounded-md border px-3 focus:outline-none focus:ring-2 focus:ring-[#800000]" style={{ borderColor: LINE }} />
+        <input id="refine" value={text} disabled={disabled} onChange={(e) => setText(e.target.value)} placeholder="e.g. set days to 3, or add a speaker Dr. Ada with $300" className="flex-1 h-10 rounded-md border px-3 focus:outline-none focus:ring-2 focus:ring-[#800000]" style={{ borderColor: LINE }} />
         <button type="submit" disabled={disabled} className="h-10 px-4 inline-flex items-center gap-2 rounded-md text-white font-semibold disabled:opacity-50" style={{ background: NAVY }}><Send className="h-4 w-4" /> Apply</button>
       </form>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -579,31 +604,47 @@ function RefineBar({ onSend, disabled }: { onSend: (t: string) => void; disabled
   );
 }
 
+/** Full-width photo banner under the header. */
+function Banner({ eyebrow, title, sub, tall }: { eyebrow: string; title: string; sub: string; tall: boolean }) {
+  const [ok, setOk] = useState(true);
+  return (
+    <section className="relative w-full overflow-hidden transition-[height] duration-500" style={{ height: tall ? 280 : 190, background: NAVY }} aria-label="Conference banner">
+      {ok && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src="/conference.jpg" alt="A conversation on stage at IBA Karachi" onError={() => setOk(false)} className="absolute inset-0 h-full w-full object-cover" style={{ objectPosition: "center 38%" }} />
+      )}
+      <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, rgba(58,14,22,.94) 0%, rgba(74,29,36,.78) 40%, rgba(74,29,36,.2) 100%)" }} />
+      <div className="relative mx-auto max-w-6xl px-5 h-full flex flex-col justify-end pb-8 text-white">
+        <div className="text-[11px] tracking-[0.25em] opacity-80" style={{ fontFamily: MONO }}>{eyebrow}</div>
+        <h1 className="text-5xl font-semibold tracking-tight mt-1" style={{ color: "#fff" }}>{title}</h1>
+        <p className="mt-1.5 text-white/85 max-w-2xl">{sub}</p>
+      </div>
+    </section>
+  );
+}
+
 function Dashboard(props: {
   ws: Workspace; busy: boolean; log: string[]; canUndo: boolean; canSwitch: boolean;
   onReset: () => void; onUndo: () => void; onSwitch: () => void; onEdit: (p: PlannerParams) => void; onRefine: (t: string) => void;
+  onSpeakers: (l: Speaker[]) => void; onRaiseBudget: (b: number) => void;
 }) {
   const { ws, busy } = props;
   const { params, spec, schedule, resolution } = ws;
   const [focus, setFocus] = useState<number | null>(null);
 
   const registry: Record<CompName, { span: string; node: React.ReactNode }> = {
-    SpeakerCard: { span: "", node: <SpeakerCard spec={spec} topic={params.topic} budget={params.budget} /> },
+    SpeakerCard: { span: "", node: <SpeakersCard speakers={spec.speakers} topic={params.topic} budget={params.budget} onChange={props.onSpeakers} onRaiseBudget={props.onRaiseBudget} /> },
     TutorialList: { span: "", node: <TutorialList schedule={schedule} spec={spec} semesters={params.semesters} focus={focus} setFocus={setFocus} /> },
     ScheduleTable: { span: "lg:col-span-2", node: <ScheduleTable schedule={schedule} resolution={resolution} focus={focus} /> },
-    BudgetChart: { span: "", node: <BudgetChart spec={spec} budget={params.budget} /> },
-    TaskChecklist: { span: "", node: <TaskChecklist tasks={spec.tasks} speakerName={spec.speaker.name} /> },
+    BudgetChart: { span: "", node: <BudgetChart speakers={spec.speakers} budget={params.budget} /> },
+    TaskChecklist: { span: "", node: <TaskChecklist tasks={spec.tasks} speakerName={spec.speakers.length > 1 ? `${spec.speakers[0].name} and ${spec.speakers.length - 1} other speaker(s)` : spec.speakers[0].name} /> },
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="text-[11px] tracking-[0.2em] flex items-center gap-2" style={{ fontFamily: MONO, color: MAROON }}>
-            PLAN GENERATED {busy && <span className="inline-flex items-center gap-1 text-stone-500"><Loader2 className="h-3 w-3 animate-spin" /> UPDATING…</span>}
-          </div>
-          <h2 className="text-5xl font-semibold tracking-tight mt-1" style={{ color: NAVY }}>{params.topic} Conference · {params.days} {params.days === 1 ? "day" : "days"}</h2>
-          <p className="text-stone-600 mt-1">{params.tutorials} tutorials for {params.semesters} semester students · ${params.budget.toLocaleString()} speaker budget</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="text-[11px] tracking-[0.2em] flex items-center gap-2 text-stone-500" style={{ fontFamily: MONO }}>
+          {busy ? <span className="inline-flex items-center gap-1.5" style={{ color: MAROON }}><Loader2 className="h-3 w-3 animate-spin" /> UPDATING WORKSPACE…</span> : "WORKSPACE READY"}
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={props.onUndo} disabled={!props.canUndo || busy} className="h-10 px-4 inline-flex items-center gap-2 rounded-md border text-sm font-semibold hover:bg-[#FBF6EE] disabled:opacity-40" style={{ color: NAVY, borderColor: NAVY }}><Undo2 className="h-4 w-4" /> Undo</button>
@@ -706,12 +747,15 @@ export default function Page() {
       if (!alive()) return;
       spec = r.spec;
       source = r.source;
+      // keep what the user already edited (speakers, their costs, added components)
+      if (o.prevSpec?.speakers?.length) spec = { ...spec, speakers: o.prevSpec.speakers };
+      if (o.prevSpec?.components?.length) spec = { ...spec, components: o.prevSpec.components };
     }
     await step("build_schedule", `resolution=${resolution}`, 400);
     await step("render_workspace", spec.components.join(", "), 400);
     if (!alive()) return;
 
-    const next: Workspace = { params, resolution, spec, schedule: buildSchedule(params, resolution), source };
+    const next: Workspace = { params, resolution, spec, schedule: buildSchedule(params, resolution, spec.speakers.map((x) => x.name)), source };
     if (before && JSON.stringify([before.params, before.resolution, before.spec]) !== JSON.stringify([next.params, next.resolution, next.spec])) {
       setPast((p) => [...p.slice(-9), before]);
     }
@@ -734,6 +778,15 @@ export default function Page() {
   };
   const handleEdit = (p: PlannerParams) => { if (ws) runPipeline({ params: p, prevSpec: ws.spec }); };
   const handleRefine = (t: string) => { if (ws) runPipeline({ params: ws.params, instruction: t, prevSpec: ws.spec }); };
+  const handleRaiseBudget = (b: number) => { if (ws) runPipeline({ params: { ...ws.params, budget: b }, prevSpec: ws.spec, message: `Budget raised to $${b.toLocaleString()} to cover speaker costs.` }); };
+  const handleSpeakers = (list: Speaker[]) => {
+    const cur = wsRef.current;
+    if (!cur || JSON.stringify(list) === JSON.stringify(cur.spec.speakers)) return;
+    const spec = { ...cur.spec, speakers: list };
+    setPast((p) => [...p.slice(-9), cur]);
+    setWs({ ...cur, spec, schedule: buildSchedule(cur.params, cur.resolution, list.map((x) => x.name)) });
+    setLog((l) => [`Speakers updated: ${list.length} speaker(s), total $${totalSpeakerCost(list).toLocaleString()} of $${cur.params.budget.toLocaleString()}.`, ...l]);
+  };
   const handleSwitch = () => {
     if (!ws) return;
     const other = detectClash(ws.params).options.find((o) => o.id !== ws.resolution);
@@ -755,9 +808,19 @@ export default function Page() {
 
   const canSwitch = !!ws && detectClash(ws.params).hasClash && detectClash(ws.params).options.length > 1;
 
+  const banner =
+    phase === "dashboard" && ws
+      ? { eyebrow: "PLAN GENERATED", title: `${ws.params.topic} Conference · ${ws.params.days} ${ws.params.days === 1 ? "day" : "days"}`, sub: `${ws.params.tutorials} tutorials for ${ws.params.semesters} semester students · $${ws.params.budget.toLocaleString()} speaker budget`, tall: false }
+      : phase === "clash"
+        ? { eyebrow: "REVIEW", title: "One decision to make", sub: "Choose how to fit your sessions, then the workspace is built.", tall: false }
+        : phase === "form"
+          ? { eyebrow: "NEW BRIEF", title: "Plan your conference", sub: "Fill in the details. The preview updates as you type.", tall: true }
+          : { eyebrow: "WORKING", title: "Building your plan", sub: "The planner is checking your brief and preparing the workspace.", tall: false };
+
   return (
     <div className="min-h-screen text-stone-900" style={{ background: "#F4ECE0", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
       <PortalHeader phase={phase} />
+      <Banner {...banner} />
       <main className="mx-auto max-w-6xl px-5 py-8 space-y-6">
         {(phase === "processing" || phase === "clash" || phase === "generating") && (
           <button onClick={back} className="inline-flex items-center gap-1.5 text-sm text-stone-600 hover:text-stone-900"><ArrowLeft className="h-4 w-4" /> {ws ? "Cancel change" : "Start over"}</button>
@@ -783,7 +846,7 @@ export default function Page() {
         )}
         {phase === "dashboard" && ws && (
           <>
-            <Dashboard ws={ws} busy={busy} log={log} canUndo={past.length > 0} canSwitch={canSwitch} onReset={reset} onUndo={undo} onSwitch={handleSwitch} onEdit={handleEdit} onRefine={handleRefine} />
+            <Dashboard ws={ws} busy={busy} log={log} canUndo={past.length > 0} canSwitch={canSwitch} onReset={reset} onUndo={undo} onSwitch={handleSwitch} onEdit={handleEdit} onRefine={handleRefine} onSpeakers={handleSpeakers} onRaiseBudget={handleRaiseBudget} />
             <details className="text-sm" open={busy}><summary className="cursor-pointer text-stone-600">Show AI tool calls</summary><div className="mt-3 max-w-xl"><ToolTrace events={events} /></div></details>
           </>
         )}
@@ -792,6 +855,7 @@ export default function Page() {
     </div>
   );
 }
+
 const KIND_STYLE: Record<SessionKind, { bg: string; fg: string; border: string }> = {
   opening: { bg: "#F3E7D8", fg: NAVY, border: NAVY },
   keynote: { bg: MAROON, fg: "#fff", border: "#5A0000" },
@@ -848,5 +912,8 @@ function ScheduleTable({ schedule, resolution, focus }: { schedule: Schedule; re
     </section>
   );
 }
+
+
+
 
 
