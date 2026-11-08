@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+h1,
+h2,
+h3 {
+  font-family: "Cormorant Garamond", Georgia, serif !important;
+  letter-spacing: -0.005em;
+}
+h3 {
+  font-size: 1.45rem;
+  line-height: 1.2;
+}
